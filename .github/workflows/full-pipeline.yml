@@ -8,7 +8,7 @@ on:
 jobs:
   sdk:
     runs-on: ubuntu-latest
-    # Required for Semantic Release and Tagging
+    # Required for semantic-release and pushing tags
     permissions:
       contents: write
       issues: write
@@ -24,11 +24,8 @@ jobs:
       - name: 📥 Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 
+          fetch-depth: 0
 
-      # -----------------------------
-      # Setup environments
-      # -----------------------------
       - name: 🟦 Setup Node
         uses: actions/setup-node@v4
         with:
@@ -45,40 +42,32 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      # -----------------------------
-      # Install tools & Fetch Spec
-      # -----------------------------
       - name: Install generators + semantic-release
         run: |
           npm install -g @openapitools/openapi-generator-cli semantic-release @semantic-release/git @semantic-release/changelog @semantic-release/npm
           pip install openapi-python-client requests build twine
           go install github.com/deepmap/oapi-codegen/cmd/oapi-codegen@latest
 
-      - name: 🌐 Fetch OpenAI Spec
-        run: curl -s https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml -o openai.json
+      # Added this to ensure openai.json exists before generation
+      - name: 📥 Fetch OpenAPI Spec
+        run: |
+          if [ ! -f openai.json ]; then
+            curl -s https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml -o openai.json
+          fi
 
-      # -----------------------------
-      # Generate SDKs
-      # -----------------------------
       - name: Generate SDKs
         run: |
           mkdir -p clients/typescript clients/python clients/go
-
+          
           # TypeScript
-          npx @openapitools/openapi-generator-cli generate \
-            -i openai.json \
-            -g typescript-fetch \
-            -o ./clients/typescript
-
+          npx @openapitools/openapi-generator-cli generate -i openai.json -g typescript-fetch -o ./clients/typescript
+          
           # Python
-          openapi-python-client generate --path openai.json --output-path ./clients/python
+          openapi-python-client generate --path openai.json --output-path ./clients/python --overwrite
 
           # Go
           oapi-codegen -package client openai.json > ./clients/go/client.go
 
-      # -----------------------------
-      # REAL API TESTS
-      # -----------------------------
       - name: 🧪 Test TypeScript (real request)
         run: |
           cd clients/typescript
@@ -88,12 +77,10 @@ jobs:
           cat <<EOF > test.js
           import fetch from "node-fetch";
           const res = await fetch(process.env.BASE_URL + "/models", {
-            headers: {
-              Authorization: "Bearer " + process.env.OPENAI_API_KEY
-            }
+            headers: { Authorization: "Bearer " + process.env.OPENAI_API_KEY }
           });
           if (!res.ok) {
-            console.error("TS API test failed with status:", res.status);
+            console.error("TS API test failed:", res.status);
             process.exit(1);
           }
           console.log("TS API OK");
@@ -120,19 +107,12 @@ jobs:
         run: |
           cat <<EOF > test.go
           package main
-          import (
-            "fmt"
-            "net/http"
-            "os"
-          )
+          import ("fmt"; "net/http"; "os")
           func main() {
             req, _ := http.NewRequest("GET", os.Getenv("BASE_URL")+"/models", nil)
             req.Header.Set("Authorization", "Bearer "+os.Getenv("OPENAI_API_KEY"))
-            client := &http.Client{}
-            res, err := client.Do(req)
-            if err != nil || res.StatusCode != 200 {
-              panic("Go API test failed")
-            }
+            res, err := (&http.Client{}).Do(req)
+            if err != nil || res.StatusCode != 200 { panic("Go API test failed") }
             fmt.Println("Go API OK")
           }
           EOF
@@ -140,9 +120,6 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
-      # -----------------------------
-      # Semantic Release
-      # -----------------------------
       - name: 🧠 Semantic Release
         run: |
           cat <<EOF > .releaserc.json
@@ -162,24 +139,20 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      # -----------------------------
-      # Publish Python
-      # -----------------------------
       - name: 📦 Publish Python
         run: |
-          cd clients/python/*client # Navigate into generated package dir
+          cd clients/python/*
           python -m build
           twine upload dist/*
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
 
-      # -----------------------------
-      # Publish Go
-      # -----------------------------
       - name: 📦 Publish Go Module
         run: |
           cd clients/go
           go mod init github.com/${{ github.repository }}/go-client || true
-          git tag $(date +'%Y.%m.%d')
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git tag v$(date +'%Y.%m.%d-%H%M')
           git push origin --tags
