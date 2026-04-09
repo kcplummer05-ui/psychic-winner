@@ -8,7 +8,6 @@ on:
 jobs:
   sdk:
     runs-on: ubuntu-latest
-    # Required for semantic-release and pushing tags
     permissions:
       contents: write
       issues: write
@@ -42,32 +41,24 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Install generators + semantic-release
+      - name: Install tools
         run: |
           npm install -g @openapitools/openapi-generator-cli semantic-release @semantic-release/git @semantic-release/changelog @semantic-release/npm
           pip install openapi-python-client requests build twine
           go install github.com/deepmap/oapi-codegen/cmd/oapi-codegen@latest
 
-      # Added this to ensure openai.json exists before generation
-    - name: 📥 Fetch OpenAPI Spec
+      - name: 📥 Fetch OpenAPI Spec
         run: |
-          # We use the -L flag to follow redirects and ensure we get the RAW file
-          curl -L https://raw.githubusercontent.com/openai/openapi-openapi/master/openapi.yaml -o openai.json
+          curl -L https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml -o openai.json
 
       - name: Generate SDKs
         run: |
           mkdir -p clients/typescript clients/python clients/go
-          
-          # TypeScript
           npx @openapitools/openapi-generator-cli generate -i openai.json -g typescript-fetch -o ./clients/typescript
-          
-          # Python
           openapi-python-client generate --path openai.json --output-path ./clients/python --overwrite
-
-          # Go
           oapi-codegen -package client openai.json > ./clients/go/client.go
 
-      - name: 🧪 Test TypeScript (real request)
+      - name: 🧪 Test TypeScript
         run: |
           cd clients/typescript
           npm init -y
@@ -78,17 +69,14 @@ jobs:
           const res = await fetch(process.env.BASE_URL + "/models", {
             headers: { Authorization: "Bearer " + process.env.OPENAI_API_KEY }
           });
-          if (!res.ok) {
-            console.error("TS API test failed:", res.status);
-            process.exit(1);
-          }
+          if (!res.ok) process.exit(1);
           console.log("TS API OK");
           EOF
           node test.js
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
-      - name: 🧪 Test Python (real request)
+      - name: 🧪 Test Python
         run: |
           python - <<EOF
           import os, requests
@@ -96,13 +84,13 @@ jobs:
               os.environ["BASE_URL"] + "/models",
               headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"}
           )
-          assert res.status_code == 200, f"Python API test failed: {res.status_code}"
+          assert res.status_code == 200
           print("Python API OK")
           EOF
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
-      - name: 🧪 Test Go (real request)
+      - name: 🧪 Test Go
         run: |
           cat <<EOF > test.go
           package main
@@ -111,7 +99,7 @@ jobs:
             req, _ := http.NewRequest("GET", os.Getenv("BASE_URL")+"/models", nil)
             req.Header.Set("Authorization", "Bearer "+os.Getenv("OPENAI_API_KEY"))
             res, err := (&http.Client{}).Do(req)
-            if err != nil || res.StatusCode != 200 { panic("Go API test failed") }
+            if err != nil || res.StatusCode != 200 { panic("fail") }
             fmt.Println("Go API OK")
           }
           EOF
@@ -147,7 +135,7 @@ jobs:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
 
-      - name: 📦 Publish Go Module
+      - name: 📦 Publish Go
         run: |
           cd clients/go
           go mod init github.com/${{ github.repository }}/go-client || true
