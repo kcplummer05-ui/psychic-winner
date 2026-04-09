@@ -8,6 +8,11 @@ on:
 jobs:
   sdk:
     runs-on: ubuntu-latest
+    # Required for Semantic Release and Tagging
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
 
     env:
       NODE_VERSION: 20
@@ -19,7 +24,7 @@ jobs:
       - name: 📥 Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # required for semantic-release
+          fetch-depth: 0 
 
       # -----------------------------
       # Setup environments
@@ -41,13 +46,16 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       # -----------------------------
-      # Install tools
+      # Install tools & Fetch Spec
       # -----------------------------
       - name: Install generators + semantic-release
         run: |
           npm install -g @openapitools/openapi-generator-cli semantic-release @semantic-release/git @semantic-release/changelog @semantic-release/npm
           pip install openapi-python-client requests build twine
           go install github.com/deepmap/oapi-codegen/cmd/oapi-codegen@latest
+
+      - name: 🌐 Fetch OpenAI Spec
+        run: curl -s https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml -o openai.json
 
       # -----------------------------
       # Generate SDKs
@@ -62,44 +70,11 @@ jobs:
             -g typescript-fetch \
             -o ./clients/typescript
 
-          # Inject TS auth helper
-          cat <<EOF > clients/typescript/auth.ts
-export function getHeaders() {
-  return {
-    Authorization: \`Bearer \${process.env.OPENAI_API_KEY}\`,
-    "Content-Type": "application/json"
-  };
-}
-EOF
-
           # Python
-          openapi-python-client generate \
-            --path openai.json \
-            --output-path ./clients/python
-
-          cat <<EOF > clients/python/auth.py
-import os
-def get_headers():
-    return {
-        "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
-        "Content-Type": "application/json"
-    }
-EOF
+          openapi-python-client generate --path openai.json --output-path ./clients/python
 
           # Go
           oapi-codegen -package client openai.json > ./clients/go/client.go
-
-          cat <<EOF > clients/go/auth.go
-package client
-import "os"
-
-func GetHeaders() map[string]string {
-  return map[string]string{
-    "Authorization": "Bearer " + os.Getenv("OPENAI_API_KEY"),
-    "Content-Type": "application/json",
-  }
-}
-EOF
 
       # -----------------------------
       # REAL API TESTS
@@ -108,25 +83,21 @@ EOF
         run: |
           cd clients/typescript
           npm init -y
+          npm pkg set type="module"
           npm install node-fetch
-
           cat <<EOF > test.js
-import fetch from "node-fetch";
-
-const res = await fetch(process.env.BASE_URL + "/models", {
-  headers: {
-    Authorization: "Bearer " + process.env.OPENAI_API_KEY
-  }
-});
-
-if (!res.ok) {
-  console.error("TS API test failed");
-  process.exit(1);
-}
-
-console.log("TS API OK");
-EOF
-
+          import fetch from "node-fetch";
+          const res = await fetch(process.env.BASE_URL + "/models", {
+            headers: {
+              Authorization: "Bearer " + process.env.OPENAI_API_KEY
+            }
+          });
+          if (!res.ok) {
+            console.error("TS API test failed with status:", res.status);
+            process.exit(1);
+          }
+          console.log("TS API OK");
+          EOF
           node test.js
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -134,45 +105,37 @@ EOF
       - name: 🧪 Test Python (real request)
         run: |
           python - <<EOF
-import os, requests
-
-res = requests.get(
-    os.environ["BASE_URL"] + "/models",
-    headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"}
-)
-
-assert res.status_code == 200, "Python API test failed"
-print("Python API OK")
-EOF
+          import os, requests
+          res = requests.get(
+              os.environ["BASE_URL"] + "/models",
+              headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"}
+          )
+          assert res.status_code == 200, f"Python API test failed: {res.status_code}"
+          print("Python API OK")
+          EOF
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
       - name: 🧪 Test Go (real request)
         run: |
           cat <<EOF > test.go
-package main
-
-import (
-  "fmt"
-  "net/http"
-  "os"
-)
-
-func main() {
-  req, _ := http.NewRequest("GET", os.Getenv("BASE_URL")+"/models", nil)
-  req.Header.Set("Authorization", "Bearer "+os.Getenv("OPENAI_API_KEY"))
-
-  client := &http.Client{}
-  res, err := client.Do(req)
-
-  if err != nil || res.StatusCode != 200 {
-    panic("Go API test failed")
-  }
-
-  fmt.Println("Go API OK")
-}
-EOF
-
+          package main
+          import (
+            "fmt"
+            "net/http"
+            "os"
+          )
+          func main() {
+            req, _ := http.NewRequest("GET", os.Getenv("BASE_URL")+"/models", nil)
+            req.Header.Set("Authorization", "Bearer "+os.Getenv("OPENAI_API_KEY"))
+            client := &http.Client{}
+            res, err := client.Do(req)
+            if err != nil || res.StatusCode != 200 {
+              panic("Go API test failed")
+            }
+            fmt.Println("Go API OK")
+          }
+          EOF
           go run test.go
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -183,18 +146,17 @@ EOF
       - name: 🧠 Semantic Release
         run: |
           cat <<EOF > .releaserc.json
-{
-  "branches": ["main"],
-  "plugins": [
-    "@semantic-release/commit-analyzer",
-    "@semantic-release/release-notes-generator",
-    "@semantic-release/changelog",
-    "@semantic-release/npm",
-    "@semantic-release/git"
-  ]
-}
-EOF
-
+          {
+            "branches": ["main"],
+            "plugins": [
+              "@semantic-release/commit-analyzer",
+              "@semantic-release/release-notes-generator",
+              "@semantic-release/changelog",
+              "@semantic-release/npm",
+              "@semantic-release/git"
+            ]
+          }
+          EOF
           semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -205,7 +167,7 @@ EOF
       # -----------------------------
       - name: 📦 Publish Python
         run: |
-          cd clients/python
+          cd clients/python/*client # Navigate into generated package dir
           python -m build
           twine upload dist/*
         env:
