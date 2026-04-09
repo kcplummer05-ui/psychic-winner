@@ -41,11 +41,18 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Install tools
+    - name: Install tools
         run: |
           npm install -g @openapitools/openapi-generator-cli semantic-release @semantic-release/git @semantic-release/changelog @semantic-release/npm
           pip install openapi-python-client requests build twine
           go install github.com/deepmap/oapi-codegen/cmd/oapi-codegen@latest
+
+      - name: 📥 Fetch OpenAPI Spec
+        run: |
+          # Use the official OpenAI raw specification link
+          curl -L https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml -o openai.json
+
+      - name: Generate SDKs
 
      - name: 📥 Fetch OpenAPI Spec
         run: |
