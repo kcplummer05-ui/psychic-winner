@@ -49,11 +49,10 @@ jobs:
           go install github.com/deepmap/oapi-codegen/cmd/oapi-codegen@latest
 
       # Added this to ensure openai.json exists before generation
-      - name: 📥 Fetch OpenAPI Spec
+    - name: 📥 Fetch OpenAPI Spec
         run: |
-          if [ ! -f openai.json ]; then
-            curl -s https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml -o openai.json
-          fi
+          # We use the -L flag to follow redirects and ensure we get the RAW file
+          curl -L https://raw.githubusercontent.com/openai/openapi-openapi/master/openapi.yaml -o openai.json
 
       - name: Generate SDKs
         run: |
