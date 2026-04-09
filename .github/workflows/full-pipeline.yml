@@ -49,12 +49,14 @@ jobs:
 
       - name: 📥 Fetch OpenAPI Spec
         run: |
+          # Use the official OpenAI raw specification link with -L to follow redirects
           curl -L https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml -o openai.json
 
       - name: ⚙️ Generate SDKs
         run: |
           mkdir -p clients/typescript clients/python clients/go
-          npx @openapitools/openapi-generator-cli generate -i openai.json -g typescript-fetch -o ./clients/typescript
+          # Using --skip-validate-spec to bypass minor formatting errors in the source spec
+          npx @openapitools/openapi-generator-cli generate -i openai.json -g typescript-fetch -o ./clients/typescript --skip-validate-spec
           openapi-python-client generate --path openai.json --output-path ./clients/python --overwrite
           oapi-codegen -package client openai.json > ./clients/go/client.go
 
@@ -128,6 +130,7 @@ jobs:
 
       - name: 📦 Publish Python
         run: |
+          # Finding the generated folder dynamically
           cd clients/python/*
           python -m build
           twine upload dist/*
